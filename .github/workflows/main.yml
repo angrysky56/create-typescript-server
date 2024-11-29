@@ -38,10 +38,18 @@ jobs:
       - name: Create Test Server Directory
         run: mkdir -p test-server
 
-      # Step 7: Create a Valid Package.json
-      - name: Create a Valid Package.json
+      # Step 7: Create a Valid Test Server Package.json with Build Script
+      - name: Create a Valid Test Server Package.json with Build Script
         run: |
-          echo '{}' > test-server/package.json
+          echo '{
+            "name": "test-server",
+            "version": "1.0.0",
+            "main": "index.js",
+            "license": "MIT",
+            "scripts": {
+              "build": "echo Building test server..."
+            }
+          }' > test-server/package.json
 
       # Step 8: Run Test Server Creation Script
       - name: Test Creation from Template
@@ -51,12 +59,8 @@ jobs:
       # Step 9: Debug Test Server Package.json
       - name: Debug Test Server Package.json
         run: |
-          if [ -f "test-server/package.json" ]; then
-            echo "Contents of test-server/package.json:"
-            cat test-server/package.json
-          else
-            echo "test-server/package.json does not exist"
-          fi
+          echo "Contents of test-server/package.json:"
+          cat test-server/package.json || echo "test-server/package.json does not exist or is invalid"
 
       # Step 10: Validate Generated Project
       - name: Validate Generated Project
@@ -68,4 +72,5 @@ jobs:
             npm link
           else
             echo "test-server directory does not exist"
+            exit 1
           fi
