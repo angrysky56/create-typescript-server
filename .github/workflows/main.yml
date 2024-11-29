@@ -4,10 +4,6 @@ on:
       - main
   pull_request:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 18 # Use the Node.js version your project requires
           cache: npm
 
       # Step 3: Install Dependencies
@@ -32,22 +28,29 @@ jobs:
       - name: Build the Project
         run: npm run build
 
-      # Step 5: Debugging Environment
-      - name: Debug Build Output
+      # Step 5: Debug Build Directory
+      - name: Debug Build Directory
         run: |
-          echo "Node version: $(node --version)"
-          echo "NPM version: $(npm --version)"
-          echo "Build directory contents:"
-          ls -l build
-          echo "Current working directory:"
-          pwd
+          echo "Checking build directory:"
+          ls -l build || echo "Build directory not found"
 
       # Step 6: Run Test Server Creation Script
       - name: Test Creation from Template
         run: |
+          echo "Running test server script"
           node ./build/index.js test-server --name test-server --description "Here is a test server"
 
-      # Step 7: Validate Generated Project
+      # Step 7: Debug Test Server Directory
+      - name: Debug Test Server Directory
+        run: |
+          echo "Checking test-server directory:"
+          if [ -d "test-server" ]; then
+            ls -l test-server
+          else
+            echo "test-server directory does not exist"
+          fi
+
+      # Step 8: Validate Generated Project
       - name: Validate Generated Project
         run: |
           if [ -d "test-server" ]; then
