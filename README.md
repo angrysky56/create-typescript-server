@@ -1,3 +1,4 @@
+# Caution AI code- I am not a coder!!! I am sure this doesn't work yet if it ever will.
 # Workspace DB Manager
 
 An MCP (Model Context Protocol) server for managing workspace databases with filesystem integration.
