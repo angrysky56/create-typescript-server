@@ -1,31 +1,142 @@
-# create-typescript-server ![NPM Version](https://img.shields.io/npm/v/%40modelcontextprotocol%2Fcreate-server)
+# Workspace DB Manager
 
-A command line tool for quickly scaffolding new MCP (Model Context Protocol) servers.
+An MCP (Model Context Protocol) server for managing workspace databases with filesystem integration.
 
-## Getting Started
+## Features
+
+- Automatic SQLite database discovery and management
+- Real-time filesystem monitoring
+- Database state tracking and management
+- Cross-database operations support
+- TypeScript/ES Module architecture
+
+## Installation
 
 ```bash
-# Create a new server in the directory `my-server`
-npx @modelcontextprotocol/create-server my-server
-
-# With options
-npx @modelcontextprotocol/create-server my-server --name "My MCP Server" --description "A custom MCP server"
+npm install
+npm run build
 ```
 
-After creating your server:
+## Usage
+
+```typescript
+import { WorkspaceManager } from 'workspace-db-manager';
+
+// Create server instance
+const manager = new WorkspaceManager({
+  watchPaths: ['/path/to/workspace'],
+  database: {
+    path: 'core.db',
+    verbose: true
+  },
+  monitor: {
+    pollInterval: 1000,
+    usePolling: true
+  }
+});
+
+// Start server
+await manager.start();
+
+// Handle MCP messages
+const response = await manager.handleMessage({
+  type: 'list_databases'
+});
+
+console.log('Managed databases:', response.data.databases);
+```
+
+## MCP Message Types
+
+### Status
+Get server status:
+```typescript
+const response = await manager.handleMessage({ type: 'status' });
+// Returns: uptime, database count, watched paths, etc.
+```
+
+### Database Operations
+List managed databases:
+```typescript
+const response = await manager.handleMessage({ type: 'list_databases' });
+// Returns: array of managed databases with status
+```
+
+Get database info:
+```typescript
+const response = await manager.handleMessage({
+  type: 'database_info',
+  data: { path: 'path/to/database.db' }
+});
+// Returns: detailed database information including tables
+```
+
+Attach database:
+```typescript
+const response = await manager.handleMessage({
+  type: 'attach_database',
+  data: { path: 'path/to/database.db' }
+});
+```
+
+Detach database:
+```typescript
+const response = await manager.handleMessage({
+  type: 'detach_database',
+  data: { path: 'path/to/database.db' }
+});
+```
+
+### Path Management
+Update watched paths:
+```typescript
+const response = await manager.handleMessage({
+  type: 'update_paths',
+  data: {
+    operation: 'add', // or 'set', 'remove'
+    paths: ['/new/path/to/watch']
+  }
+});
+```
+
+List watched paths:
+```typescript
+const response = await manager.handleMessage({ type: 'list_paths' });
+```
+
+## Events
+
+The server emits various events:
+```typescript
+manager.on('event', (event) => {
+  // Handle server events
+  switch (event.type) {
+    case 'database:added':
+      console.log('New database:', event.path);
+      break;
+    case 'database:changed':
+      console.log('Database changed:', event.path);
+      break;
+    case 'database:removed':
+      console.log('Database removed:', event.path);
+      break;
+  }
+});
+```
+
+## Development
 
 ```bash
-cd my-server     # Navigate to server directory
-npm install      # Install dependencies
+# Run tests
+npm test
 
-npm run build    # Build once
-# or...
-npm run watch    # Start TypeScript compiler in watch mode
+# Run tests with coverage
+npm run test:coverage
 
-# optional
-npm link         # Make your server binary globally available
+# Development mode
+npm run dev
 ```
 
 ## License
 
-This project is licensed under the MIT License—see the [LICENSE](LICENSE) file for details.
+MIT
