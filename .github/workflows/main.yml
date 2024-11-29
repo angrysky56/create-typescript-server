@@ -34,16 +34,31 @@ jobs:
           echo "Checking build directory:"
           ls -l build || echo "Build directory not found"
 
-      # Step 6: Create Test Server Directory (if not created by your script)
+      # Step 6: Create Test Server Directory
       - name: Create Test Server Directory
         run: mkdir -p test-server
 
-      # Step 7: Run Test Server Creation Script
+      # Step 7: Create a Valid Package.json
+      - name: Create a Valid Package.json
+        run: |
+          echo '{}' > test-server/package.json
+
+      # Step 8: Run Test Server Creation Script
       - name: Test Creation from Template
         run: |
           node ./build/index.js test-server --name test-server --description "Here is a test server"
 
-      # Step 8: Validate Generated Project
+      # Step 9: Debug Test Server Package.json
+      - name: Debug Test Server Package.json
+        run: |
+          if [ -f "test-server/package.json" ]; then
+            echo "Contents of test-server/package.json:"
+            cat test-server/package.json
+          else
+            echo "test-server/package.json does not exist"
+          fi
+
+      # Step 10: Validate Generated Project
       - name: Validate Generated Project
         run: |
           if [ -d "test-server" ]; then
