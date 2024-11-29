@@ -31,6 +31,7 @@ export type DatabaseEvent = {
   path: string;
   timestamp: Date;
   size?: number;
+  extension?: string; // Add this property
 };
 
 // Type aliases
