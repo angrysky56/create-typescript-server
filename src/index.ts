@@ -1,202 +1,222 @@
-#!/usr/bin/env node
-import chalk from "chalk";
-import { Command } from "commander";
-import ejs from "ejs";
-import fs from "fs/promises";
-import inquirer from "inquirer";
-import ora from "ora";
-import os from "os";
-import path from "path";
-import { fileURLToPath } from "url";
+import { EventEmitter } from 'events';
+import { randomUUID } from 'crypto';
+import debug from 'debug';
+import {
+  ServerConfig,
+  ServerConfigSchema,
+  ServerEvent,
+  ServerState,
+  MCPRequest,
+  MCPResponse
+} from './types/server.js';
+import { DatabaseManager } from './core/database/manager.js';
+import { FileSystemWatcher } from './core/monitor/watcher.js';
+import { handlers, type HandlerContext } from './handlers/index.js';
+import type { DatabaseEvent } from './types/database.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-function getClaudeConfigDir(): string {
-  switch (os.platform()) {
-    case "darwin":
-      return path.join(
-        os.homedir(),
-        "Library",
-        "Application Support",
-        "Claude",
-      );
-    case "win32":
-      if (!process.env.APPDATA) {
-        throw new Error("APPDATA environment variable is not set");
-      }
-      return path.join(process.env.APPDATA, "Claude");
-    default:
-      throw new Error(
-        `Unsupported operating system for Claude configuration: ${os.platform()}`,
-      );
-  }
-}
+const log = debug('mcp:workspace-manager');
 
-async function updateClaudeConfig(name: string, directory: string) {
-  try {
-    const configFile = path.join(
-      getClaudeConfigDir(),
-      "claude_desktop_config.json",
-    );
+export class WorkspaceManager extends EventEmitter {
+  private readonly config: ServerConfig;
+  private state: ServerState;
+  private startTime?: Date;
+  private dbManager: DatabaseManager;
+  private fileWatcher: FileSystemWatcher;
 
-    let config;
-    try {
-      config = JSON.parse(await fs.readFile(configFile, "utf-8"));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
-      }
+  constructor(config: Partial<ServerConfig>) {
+    super();
+    
+    // Validate and process configuration
+    const validatedConfig = ServerConfigSchema.parse({
+      serverId: config.serverId ?? `workspace-manager-${randomUUID()}`,
+      ...config
+    });
 
-      // File doesn't exist, create initial config
-      config = {};
-      await fs.mkdir(path.dirname(configFile), { recursive: true });
-    }
-
-    if (!config.mcpServers) {
-      config.mcpServers = {};
-    }
-
-    if (config.mcpServers[name]) {
-      const { replace } = await inquirer.prompt([
-        {
-          type: "confirm",
-          name: "replace",
-          message: `An MCP server named "${name}" is already configured for Claude.app. Do you want to replace it?`,
-          default: false,
-        },
-      ]);
-      if (!replace) {
-        console.log(
-          chalk.yellow(
-            `Skipped replacing Claude.app config for existing MCP server "${name}"`,
-          ),
-        );
-        return;
-      }
-    }
-    config.mcpServers[name] = {
-      command: "node",
-      args: [path.resolve(directory, "build", "index.js")],
+    this.config = validatedConfig;
+    this.state = {
+      status: 'initializing',
+      databaseCount: 0,
+      watchedPaths: this.config.watchPaths
     };
 
-    await fs.writeFile(configFile, JSON.stringify(config, null, 2));
-    console.log(
-      chalk.green("✓ Successfully added MCP server to Claude.app configuration"),
-    );
-  } catch {
-    console.log(chalk.yellow("Note: Could not update Claude.app configuration"));
+    // Initialize core components
+    this.dbManager = new DatabaseManager({
+      corePath: this.config.database?.path,
+      sqlite: {
+        verbose: this.config.database?.verbose
+      },
+      serverId: this.config.serverId
+    });
+
+    this.fileWatcher = new FileSystemWatcher({
+      paths: this.config.watchPaths,
+      ...this.config.monitor,
+      serverId: this.config.serverId
+    });
+
+    // Setup event handlers
+    this.setupEventHandlers();
+  }
+
+  private setupEventHandlers(): void {
+    // Database manager events
+    this.dbManager.on('database-added', (database) => {
+      this.state.databaseCount++;
+      const event: ServerEvent = { type: 'database:added', path: database.path };
+      this.state.lastEvent = event;
+      this.emit('event', event);
+    });
+
+    this.dbManager.on('database-changed', (database) => {
+      const event: ServerEvent = { type: 'database:changed', path: database.path };
+      this.state.lastEvent = event;
+      this.emit('event', event);
+    });
+
+    this.dbManager.on('database-removed', (path) => {
+      this.state.databaseCount--;
+      const event: ServerEvent = { type: 'database:removed', path };
+      this.state.lastEvent = event;
+      this.emit('event', event);
+    });
+
+    // File watcher events
+    this.fileWatcher.on('database-event', async (event: DatabaseEvent) => {
+      try {
+        switch (event.type) {
+          case 'add':
+            await this.dbManager.addManagedDatabase(event.path, event.size);
+            break;
+          case 'change':
+            await this.dbManager.updateManagedDatabase(event.path, { size: event.size });
+            break;
+          case 'unlink':
+            await this.dbManager.removeManagedDatabase(event.path);
+            break;
+        }
+      } catch (error) {
+        log('Error handling database event:', error);
+        this.emit('error', error as Error);
+      }
+    });
+
+    // Error handling
+    this.on('error', (error: Error) => {
+      log('Server error:', error);
+      this.state = {
+        ...this.state,
+        status: 'error',
+        error
+      };
+    });
+  }
+
+  async start(): Promise<void> {
+    try {
+      log('Starting workspace manager server...');
+      
+      // Initialize core components
+      await this.initializeComponents();
+      
+      // Update server state
+      this.startTime = new Date();
+      this.state = {
+        ...this.state,
+        status: 'running'
+      };
+      
+      this.emit({ type: 'server:start' } as ServerEvent);
+      log('Server started successfully');
+    } catch (error) {
+      log('Failed to start server:', error);
+      this.emit('error', error as Error);
+      throw error;
+    }
+  }
+
+  private async initializeComponents(): Promise<void> {
+    // Initialize database manager
+    await this.dbManager.initialize();
+    
+    // Get initial database count
+    const databases = await this.dbManager.listManagedDatabases();
+    this.state.databaseCount = databases.length;
+
+    // Start file system monitoring
+    await this.fileWatcher.start();
+  }
+
+  async stop(): Promise<void> {
+    try {
+      log('Stopping workspace manager server...');
+      
+      // Stop components
+      await this.fileWatcher.stop();
+      await this.dbManager.cleanup();
+      
+      this.state = {
+        ...this.state,
+        status: 'stopped'
+      };
+      
+      this.emit({ type: 'server:stop' } as ServerEvent);
+      log('Server stopped successfully');
+    } catch (error) {
+      log('Error stopping server:', error);
+      throw error;
+    }
+  }
+
+  // Handle incoming MCP messages
+  async handleMessage(message: MCPRequest): Promise<MCPResponse> {
+    const startTime = Date.now();
+    log('Handling message:', message.type);
+
+    try {
+      const handler = handlers.get(message.type);
+      if (!handler) {
+        throw new Error(`Unknown message type: ${message.type}`);
+      }
+
+      const context: HandlerContext = { server: this };
+      const response = await handler(message, context);
+
+      const duration = Date.now() - startTime;
+      log('Message handled successfully:', { type: message.type, duration });
+
+      return response;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      log('Error handling message:', { type: message.type, duration, error });
+
+      return {
+        success: false,
+        error: (error as Error).message
+      };
+    }
+  }
+
+  // Public getters
+  getServerId(): string {
+    return this.config.serverId;
+  }
+
+  getState(): ServerState {
+    return this.state;
+  }
+
+  getUptime(): number {
+    if (!this.startTime) return 0;
+    return Date.now() - this.startTime.getTime();
+  }
+
+  getDatabaseManager(): DatabaseManager {
+    return this.dbManager;
+  }
+
+  getFileWatcher(): FileSystemWatcher {
+    return this.fileWatcher;
   }
 }
 
-async function createServer(directory: string, options: any = {}) {
-  // Check if directory already exists
-  try {
-    await fs.access(directory);
-    console.log(chalk.red(`Error: Directory '${directory}' already exists.`));
-    process.exit(1);
-  } catch (err) {
-    // Directory doesn't exist, we can proceed
-  }
-
-  const questions = [
-    {
-      type: "input",
-      name: "name",
-      message: "What is the name of your MCP server?",
-      default: path.basename(directory),
-      when: !options.name,
-    },
-    {
-      type: "input",
-      name: "description",
-      message: "What is the description of your server?",
-      default: "A Model Context Protocol server",
-      when: !options.description,
-    },
-    {
-      type: "confirm",
-      name: "installForClaude",
-      message: "Would you like to install this server for Claude.app?",
-      default: true,
-      when: os.platform() === "darwin" || os.platform() === "win32",
-    },
-  ];
-
-  const answers = await inquirer.prompt(questions);
-
-  const config = {
-    name: options.name || answers.name,
-    description: options.description || answers.description,
-  };
-
-  const spinner = ora("Creating MCP server...").start();
-
-  try {
-    // Create project directory
-    await fs.mkdir(directory);
-
-    // Copy template files
-    const templateDir = path.join(__dirname, "../template");
-    const files = await fs.readdir(templateDir, { recursive: true });
-
-    for (const file of files) {
-      const sourcePath = path.join(templateDir, file);
-      const stats = await fs.stat(sourcePath);
-
-      if (!stats.isFile()) continue;
-
-      // Special handling for dot files - remove the leading dot from template name
-      const targetPath = path.join(
-        directory,
-        file.startsWith('dotfile-')
-          ? `.${file.slice(8).replace('.ejs', '')}`
-          : file.replace('.ejs', '')
-      );
-      const targetDir = path.dirname(targetPath);
-
-      // Create subdirectories if needed
-      await fs.mkdir(targetDir, { recursive: true });
-
-      // Read and process template file
-      let content = await fs.readFile(sourcePath, "utf-8");
-
-      // Use EJS to render the template
-      content = ejs.render(content, config);
-
-      // Write processed file
-      await fs.writeFile(targetPath, content);
-    }
-
-    spinner.succeed(chalk.green("MCP server created successfully!"));
-
-    if (answers.installForClaude) {
-      await updateClaudeConfig(config.name, directory);
-    }
-
-    // Print next steps
-    console.log("\nNext steps:");
-    console.log(chalk.cyan(`  cd ${directory}`));
-    console.log(chalk.cyan("  npm install"));
-    console.log(
-      chalk.cyan(`  npm run build  ${chalk.reset("# or: npm run watch")}`),
-    );
-    console.log(
-      chalk.cyan(
-        `  npm link       ${chalk.reset("# optional, to make available globally")}\n`,
-      ),
-    );
-  } catch (error) {
-    spinner.fail(chalk.red("Failed to create MCP server"));
-    console.error(error);
-    process.exit(1);
-  }
-}
-
-const program = new Command()
-  .name("create-mcp-server")
-  .description("Create a new MCP server")
-  .argument("<directory>", "Directory to create the server in")
-  .option("-n, --name <name>", "Name of the server")
-  .option("-d, --description <description>", "Description of the server")
-  .action(createServer);
-
-program.parse();
+export default WorkspaceManager;
