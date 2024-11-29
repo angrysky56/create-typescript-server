@@ -22,7 +22,7 @@ export async function handleListDatabases(
           name: db.name,
           size: db.size,
           status: db.status,
-          lastModified: db.last_modified
+          lastModified: db.lastModified
         }))
       }
     };
@@ -61,7 +61,7 @@ export async function handleDatabaseInfo(
         name: database.name,
         size: database.size,
         status: database.status,
-        lastModified: database.last_modified,
+        lastModified: database.lastModified,
         tables: tables.map(table => ({
           name: table.name,
           rowCount: table.rowCount ?? 0
@@ -99,7 +99,7 @@ export async function handleAttachDatabase(
         name: database.name,
         size: database.size,
         status: database.status,
-        lastModified: database.last_modified
+        lastModified: database.lastModified
       }
     };
   } catch (error) {

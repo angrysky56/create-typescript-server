@@ -125,7 +125,7 @@ export class WorkspaceManager extends EventEmitter {
         status: 'running'
       };
       
-      this.emit({ type: 'server:start' } as ServerEvent);
+      this.emit('server:start', { type: 'server:start' } as ServerEvent);
       log('Server started successfully');
     } catch (error) {
       log('Failed to start server:', error);
@@ -159,7 +159,7 @@ export class WorkspaceManager extends EventEmitter {
         status: 'stopped'
       };
       
-      this.emit({ type: 'server:stop' } as ServerEvent);
+      this.emit('server:stop', { type: 'server:stop' } as ServerEvent);
       log('Server stopped successfully');
     } catch (error) {
       log('Error stopping server:', error);
@@ -198,7 +198,7 @@ export class WorkspaceManager extends EventEmitter {
 
   // Public getters
   getServerId(): string {
-    return this.config.serverId;
+    return this.config.serverId ?? 'defaultServerId';
   }
 
   getState(): ServerState {
